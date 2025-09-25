@@ -1,7 +1,8 @@
-// app/dashboard/page.tsx
+// src/app/dashboard/page.tsx
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { 
   Chart as ChartJS, 
   CategoryScale, 
@@ -13,6 +14,9 @@ import {
   ArcElement
 } from 'chart.js';
 import { Bar, Pie } from 'react-chartjs-2';
+import { auth } from '@/lib/firebase';
+import { onAuthStateChanged, User, signOut } from 'firebase/auth';
+import { toast } from 'react-hot-toast';
 
 // Registrar componentes do Chart.js
 ChartJS.register(
@@ -26,7 +30,37 @@ ChartJS.register(
 );
 
 export default function DashboardPage() {
-  // Dados simulados
+  // Estado do usuário autenticado
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
+  const router = useRouter();
+
+  // Proteger rota: só permite acesso se logado
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      if (currentUser) {
+        setUser(currentUser);
+      } else {
+        toast.error('Faça login para acessar o dashboard.');
+        router.push('/auth/login');
+      }
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [router]);
+
+  // Função de logout
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      router.push('/');
+    } catch (error) {
+      toast.error('Erro ao sair.');
+    }
+  };
+
+  // ============ DADOS SIMULADOS (mantidos exatamente como estavam) ============
   const [balance, setBalance] = useState({
     income: 5200,
     expenses: 3150,
@@ -48,7 +82,21 @@ export default function DashboardPage() {
     { id: 5, description: "Combustível", amount: 150, date: "05/04/2025", type: "expense", category: "Transporte" }
   ]);
 
-  // Dados para gráficos
+  // Se ainda estiver carregando, mostra loading
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-gray-50">
+        <p className="text-lg text-gray-700">Carregando dashboard...</p>
+      </div>
+    );
+  }
+
+  // Se não estiver logado, não renderiza (já redirecionou)
+  if (!user) return null;
+
+  // Determina o nome a ser exibido
+  const displayName = user.displayName || user.email?.split('@')[0] || 'Usuário';
+
   const barChartData = {
     labels: ['Jan', 'Fev', 'Mar', 'Abr'],
     datasets: [
@@ -107,6 +155,7 @@ export default function DashboardPage() {
       },
     },
   };
+  // ===========================================================================
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -115,8 +164,11 @@ export default function DashboardPage() {
         <div className="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8 flex justify-between items-center">
           <h1 className="text-3xl font-bold text-gray-900">FinTrack Dashboard</h1>
           <div className="flex items-center space-x-4">
-            <span className="text-gray-700">Olá, Usuário</span>
-            <button className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition">
+            <span className="text-gray-700">Olá, <span className="font-semibold">{displayName}</span></span>
+            <button 
+              onClick={handleLogout}
+              className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition"
+            >
               Sair
             </button>
           </div>

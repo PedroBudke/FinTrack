@@ -7,7 +7,9 @@ import {
   signInWithEmailAndPassword, 
   sendPasswordResetEmail,
   signInWithPopup,
-  updateProfile
+  updateProfile,
+  sendEmailVerification,
+  User
 } from 'firebase/auth';
 import { toast } from 'react-hot-toast';
 import { useRouter } from 'next/navigation';
@@ -17,31 +19,40 @@ export default function HomePage() {
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [showRegisterModal, setShowRegisterModal] = useState(false);
   const [showForgotPasswordModal, setShowForgotPasswordModal] = useState(false);
+  const [showVerificationModal, setShowVerificationModal] = useState(false); // Novo modal
   const [loading, setLoading] = useState(false);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
   const router = useRouter();
 
-  // Verificar se usuário já está logado
+  // Verifica se usuário já está logado
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
-        // Usuário já está logado, redirecionar para dashboard
-        router.push('/dashboard');
+        setCurrentUser(user);
+        if (user.emailVerified) {
+          router.push('/dashboard');
+        } else {
+          setShowVerificationModal(true);
+        }
       }
     });
-
     return unsubscribe;
   }, [router]);
 
-  // Funções de autenticação com redirecionamento
+  // Funções de autenticação
   const handleRegister = async (email: string, password: string, name: string) => {
     setLoading(true);
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       await updateProfile(userCredential.user, { displayName: name });
-      toast.success('Conta criada com sucesso!');
+      
+      // ✅ Envia e-mail de verificação
+      await sendEmailVerification(userCredential.user);
+      
+      toast.success('Conta criada! Verifique seu e-mail para ativar sua conta.');
       setShowRegisterModal(false);
-      // Redirecionar para dashboard após cadastro
-      router.push('/dashboard');
+      setCurrentUser(userCredential.user);
+      setShowVerificationModal(true);
     } catch (error: unknown) {
       if (error instanceof Error) {
         toast.error(error.message || 'Erro ao criar conta');
@@ -56,10 +67,20 @@ export default function HomePage() {
   const handleLogin = async (email: string, password: string) => {
     setLoading(true);
     try {
-      await signInWithEmailAndPassword(auth, email, password);
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
+
+      if (!user.emailVerified) {
+        // ✅ Bloqueia login se e-mail não verificado
+        toast.error('Verifique seu e-mail antes de fazer login.');
+        await auth.signOut(); // Desloga imediatamente
+        setCurrentUser(null);
+        setShowVerificationModal(true);
+        return;
+      }
+
       toast.success('Login realizado com sucesso!');
       setShowLoginModal(false);
-      // Redirecionar para dashboard após login
       router.push('/dashboard');
     } catch (error: unknown) {
       if (error instanceof Error) {
@@ -80,9 +101,9 @@ export default function HomePage() {
       setShowForgotPasswordModal(false);
     } catch (error: unknown) {
       if (error instanceof Error) {
-        toast.error(error.message || 'Erro ao enviar e-mail de recuperação');
+        toast.error(error.message || 'Erro ao enviar e-mail');
       } else {
-        toast.error('Erro ao enviar e-mail de recuperação');
+        toast.error('Erro ao enviar e-mail');
       }
     } finally {
       setLoading(false);
@@ -93,10 +114,12 @@ export default function HomePage() {
     setLoading(true);
     try {
       await signInWithPopup(auth, provider);
+      // ✅ Nota: contas OAuth (Google/GitHub) não exigem verificação de e-mail
       toast.success('Login realizado com sucesso!');
       setShowLoginModal(false);
       setShowRegisterModal(false);
-      // Redirecionar para dashboard após login social
+      setShowForgotPasswordModal(false);
+      setShowVerificationModal(false);
       router.push('/dashboard');
     } catch (error: unknown) {
       if (error instanceof Error) {
@@ -108,6 +131,43 @@ export default function HomePage() {
       setLoading(false);
     }
   };
+
+  // ✅ Reenvia e-mail de verificação
+  const handleResendVerification = async () => {
+    if (!currentUser) return;
+    try {
+      await sendEmailVerification(currentUser);
+      toast.success('E-mail de verificação reenviado!');
+    } catch (error) {
+      toast.error('Erro ao reenviar e-mail. Tente novamente.');
+    }
+  };
+
+  // ✅ Verifica novamente se o e-mail foi verificado
+  const handleCheckVerification = async () => {
+    if (!currentUser) return;
+    try {
+      await currentUser.reload();
+      if (currentUser.emailVerified) {
+        toast.success('E-mail verificado com sucesso!');
+        setShowVerificationModal(false);
+        router.push('/dashboard');
+      } else {
+        toast.error('E-mail ainda não verificado.');
+      }
+    } catch (error) {
+      toast.error('Erro ao verificar e-mail.');
+    }
+  };
+
+  // ✅ Faz logout
+  const handleLogout = async () => {
+    await auth.signOut();
+    setCurrentUser(null);
+    setShowVerificationModal(false);
+    router.push('/');
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-600 via-purple-600 to-indigo-800">
       {/* Navbar */}
@@ -237,11 +297,83 @@ export default function HomePage() {
           loading={loading}
         />
       )}
+
+      {/* ✅ NOVO MODAL: Verificação de E-mail */}
+      {showVerificationModal && currentUser && (
+        <VerificationModal
+          email={currentUser.email || ''}
+          onResend={handleResendVerification}
+          onCheck={handleCheckVerification}
+          onLogout={handleLogout}
+          loading={loading}
+        />
+      )}
     </div>
   );
 }
 
-// Componente Modal de Login
+// ==================== MODAL DE VERIFICAÇÃO DE E-MAIL ====================
+function VerificationModal({ 
+  email, 
+  onResend, 
+  onCheck, 
+  onLogout,
+  loading
+}: { 
+  email: string; 
+  onResend: () => void; 
+  onCheck: () => void;
+  onLogout: () => void;
+  loading: boolean;
+}) {
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 relative">
+        <div className="mb-6 text-center">
+          <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <svg className="w-8 h-8 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path>
+            </svg>
+          </div>
+          <h2 className="text-2xl font-bold text-gray-800">Verifique seu e-mail</h2>
+          <p className="text-gray-600 mt-2">
+            Enviamos um link de verificação para:
+            <br />
+            <span className="font-semibold text-blue-600">{email}</span>
+          </p>
+        </div>
+
+        <div className="space-y-4">
+          <button
+            onClick={onCheck}
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition"
+          >
+            Verificar Agora
+          </button>
+
+          <button
+            onClick={onResend}
+            disabled={loading}
+            className="w-full bg-gray-200 hover:bg-gray-300 text-gray-800 font-medium py-3 px-4 rounded-lg transition disabled:opacity-50"
+          >
+            {loading ? 'Enviando...' : 'Reenviar E-mail'}
+          </button>
+
+          <button
+            onClick={onLogout}
+            className="w-full text-gray-600 hover:text-gray-800 font-medium py-3 px-4 rounded-lg transition"
+          >
+            Sair
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ==================== COMPONENTES DOS MODAIS EXISTENTES ====================
+// (LoginModal, RegisterModal, ForgotPasswordModal permanecem exatamente como antes)
+
 function LoginModal({ 
   onClose, 
   onForgotPassword, 
@@ -260,17 +392,30 @@ function LoginModal({
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
+  useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleEsc);
+    return () => window.removeEventListener('keydown', handleEsc);
+  }, [onClose]);
+
+  const handleBackdropClick = (e: React.MouseEvent) => {
+    if (e.target === e.currentTarget) onClose();
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onLogin(email, password);
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50" onClick={handleBackdropClick}>
       <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 relative">
         <button 
           onClick={onClose}
           className="absolute top-4 right-4 text-gray-500 hover:text-gray-700"
+          aria-label="Fechar"
         >
           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
@@ -361,7 +506,6 @@ function LoginModal({
   );
 }
 
-// Componente Modal de Cadastro
 function RegisterModal({ 
   onClose, 
   onLogin,
@@ -377,24 +521,85 @@ function RegisterModal({
 }) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [cpf, setCpf] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const formatCPF = (value: string) => {
+    const cleanValue = value.replace(/\D/g, '');
+    if (cleanValue.length <= 3) return cleanValue;
+    if (cleanValue.length <= 6) return `${cleanValue.slice(0, 3)}.${cleanValue.slice(3)}`;
+    if (cleanValue.length <= 9) return `${cleanValue.slice(0, 3)}.${cleanValue.slice(3, 6)}.${cleanValue.slice(6)}`;
+    return `${cleanValue.slice(0, 3)}.${cleanValue.slice(3, 6)}.${cleanValue.slice(6, 9)}-${cleanValue.slice(9, 11)}`;
+  };
+
+  const handleCPFChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const formatted = formatCPF(e.target.value);
+    setCpf(formatted);
+  };
+
+  const validateCPFLocal = (cpf: string): boolean => {
+    if (cpf.length !== 11 || /^(\d)\1{10}$/.test(cpf)) return false;
+    let sum = 0;
+    for (let i = 0; i < 9; i++) sum += parseInt(cpf.charAt(i)) * (10 - i);
+    let remainder = sum % 11;
+    const firstDigit = remainder < 2 ? 0 : 11 - remainder;
+    if (firstDigit !== parseInt(cpf.charAt(9))) return false;
+    sum = 0;
+    for (let i = 0; i < 10; i++) sum += parseInt(cpf.charAt(i)) * (11 - i);
+    remainder = sum % 11;
+    const secondDigit = remainder < 2 ? 0 : 11 - remainder;
+    return secondDigit === parseInt(cpf.charAt(10));
+  };
+
+  const validateCPFWithAPI = async (cpf: string): Promise<boolean> => {
+    const cleanCPF = cpf.replace(/\D/g, '');
+    if (cleanCPF.length !== 11) return false;
+    return validateCPFLocal(cleanCPF);
+  };
+
+  useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleEsc);
+    return () => window.removeEventListener('keydown', handleEsc);
+  }, [onClose]);
+
+  const handleBackdropClick = (e: React.MouseEvent) => {
+    if (e.target === e.currentTarget) onClose();
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (password !== confirmPassword) {
       toast.error('As senhas não coincidem!');
       return;
     }
+
+    const cleanCPF = cpf.replace(/\D/g, '');
+    if (cleanCPF.length !== 11) {
+      toast.error('CPF inválido. Preencha corretamente.');
+      return;
+    }
+
+    const isCPFValid = await validateCPFWithAPI(cleanCPF);
+
+    if (!isCPFValid) {
+      toast.error('CPF inválido. Verifique os dígitos e tente novamente.');
+      return;
+    }
+
     onRegister(email, password, name);
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50" onClick={handleBackdropClick}>
       <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 relative">
         <button 
           onClick={onClose}
           className="absolute top-4 right-4 text-gray-500 hover:text-gray-700"
+          aria-label="Fechar"
         >
           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
@@ -415,6 +620,19 @@ function RegisterModal({
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               placeholder="Seu nome completo"
               required
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">CPF</label>
+            <input 
+              type="text" 
+              value={cpf}
+              onChange={handleCPFChange}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              placeholder="000.000.000-00"
+              required
+              maxLength={14}
             />
           </div>
           
@@ -459,7 +677,7 @@ function RegisterModal({
             disabled={loading}
             className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-lg transition duration-300 disabled:opacity-50"
           >
-            {loading ? 'Criando conta...' : 'Criar Conta'}
+            {loading ? 'Verificando CPF...' : 'Criar Conta'}
           </button>
         </form>
         
@@ -500,7 +718,10 @@ function RegisterModal({
           <p className="text-gray-600 text-sm">
             Já tem uma conta? 
             <button 
-              onClick={onLogin}
+              onClick={() => {
+                onClose();
+                onLogin();
+              }}
               className="text-blue-600 hover:text-blue-800 font-medium ml-1"
             >
               Faça login
@@ -512,7 +733,6 @@ function RegisterModal({
   );
 }
 
-// Componente Modal de Recuperação de Senha
 function ForgotPasswordModal({ 
   onClose, 
   onLogin,
@@ -526,17 +746,30 @@ function ForgotPasswordModal({
 }) {
   const [email, setEmail] = useState('');
 
+  useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleEsc);
+    return () => window.removeEventListener('keydown', handleEsc);
+  }, [onClose]);
+
+  const handleBackdropClick = (e: React.MouseEvent) => {
+    if (e.target === e.currentTarget) onClose();
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onForgotPassword(email);
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50" onClick={handleBackdropClick}>
       <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 relative">
         <button 
           onClick={onClose}
           className="absolute top-4 right-4 text-gray-500 hover:text-gray-700"
+          aria-label="Fechar"
         >
           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
@@ -571,7 +804,10 @@ function ForgotPasswordModal({
         
         <div className="mt-6 text-center">
           <button 
-            onClick={onLogin}
+            onClick={() => {
+              onClose();
+              onLogin();
+            }}
             className="text-blue-600 hover:text-blue-800 text-sm font-medium"
           >
             Voltar ao login
