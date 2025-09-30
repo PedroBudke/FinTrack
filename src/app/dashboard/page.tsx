@@ -3,22 +3,30 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { 
-  Chart as ChartJS, 
-  CategoryScale, 
-  LinearScale, 
-  BarElement, 
-  Title, 
-  Tooltip, 
+import { auth, db } from "@/lib/firebase";
+import { onAuthStateChanged, User } from "firebase/auth";
+import { collection, getDocs, query, where } from "firebase/firestore";
+import { toast } from "react-hot-toast";
+import { Bar, Pie } from "react-chartjs-2";
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  Title,
+  Tooltip,
   Legend,
-  ArcElement
-} from 'chart.js';
-import { Bar, Pie } from 'react-chartjs-2';
-import { auth } from '@/lib/firebase';
-import { onAuthStateChanged, User, signOut } from 'firebase/auth';
-import { toast } from 'react-hot-toast';
+  ArcElement,
+} from "chart.js";
+import { 
+  CalendarIcon, 
+  ArrowUpIcon, 
+  ArrowDownIcon, 
+  ClockIcon, 
+  CurrencyDollarIcon,
+  PlusCircleIcon
+} from "@heroicons/react/24/outline";
 
-// Registrar componentes do Chart.js
 ChartJS.register(
   CategoryScale,
   LinearScale,
@@ -30,59 +38,165 @@ ChartJS.register(
 );
 
 export default function DashboardPage() {
-  // Estado do usuário autenticado
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [transactions, setTransactions] = useState<any[]>([]);
+  const [currencyData, setCurrencyData] = useState({
+    usd: 5.12,
+    ibov: { value: 125420, change: 1.2 }
+  });
   const router = useRouter();
 
-  // Proteger rota: só permite acesso se logado
+  // Protege rota
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       if (currentUser) {
         setUser(currentUser);
       } else {
-        toast.error('Faça login para acessar o dashboard.');
-        router.push('/auth/login');
+        toast.error("Faça login para acessar o dashboard.");
+        router.push("/auth/login");
       }
       setLoading(false);
     });
-
     return () => unsubscribe();
   }, [router]);
 
-  // Função de logout
-  const handleLogout = async () => {
-    try {
-      await signOut(auth);
-      router.push('/');
-    } catch (error) {
-      toast.error('Erro ao sair.');
-    }
-  };
+  // Busca transações do usuário
+  useEffect(() => {
+    if (!user) return;
+    
+    const fetchTransactions = async () => {
+      try {
+        const q = query(collection(db, "transactions"), where("userId", "==", user.uid));
+        const querySnapshot = await getDocs(q);
+        const transactionsData = querySnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        setTransactions(transactionsData);
+      } catch (error) {
+        console.error("Erro ao buscar transações:", error);
+        toast.error("Erro ao carregar dados financeiros.");
+      }
+    };
 
-  // ============ DADOS SIMULADOS (mantidos exatamente como estavam) ============
-  const [balance, setBalance] = useState({
-    income: 5200,
-    expenses: 3150,
-    balance: 2050
+    fetchTransactions();
+  }, [user]);
+
+  // Função mock para buscar cotações (substitua por chamada real de API se necessário)
+  async function fetchCurrencyRates() {
+      // Exemplo: Retorna dados simulados
+      return {
+          usd: 5.12,
+          ibov: { value: 125420, change: 1.2 }
+      };
+  }
+  
+  // Busca cotações
+  useEffect(() => {
+      fetchCurrencyRates().then(setCurrencyData);
+  }, []);
+
+  // Calcula balanço
+  const balanceData = transactions.reduce(
+    (acc, transaction) => {
+      if (transaction.type === "income") {
+        acc.income += transaction.value;
+      } else {
+        acc.expenses += transaction.value;
+      }
+      return acc;
+    },
+    { income: 0, expenses: 0 }
+  );
+  const balance = balanceData.income - balanceData.expenses;
+
+  // Prepara dados para gráficos
+  const expenseByCategory: Record<string, number> = {};
+  transactions
+    .filter(t => t.type === "expense")
+    .forEach(t => {
+      expenseByCategory[t.category] = (expenseByCategory[t.category] || 0) + t.value;
+    });
+
+  // Gráfico de barras: Receitas vs Despesas por mês (últimos 4 meses)
+  const monthlyData: Record<string, { income: number, expense: number }> = {};
+  const now = new Date();
+  for (let i = 3; i >= 0; i--) {
+    const month = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const monthKey = `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, '0')}`;
+    monthlyData[monthKey] = { income: 0, expense: 0 };
+  }
+
+  transactions.forEach(t => {
+    const date = new Date(t.date);
+    const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+    if (monthlyData[monthKey]) {
+      if (t.type === "income") {
+        monthlyData[monthKey].income += t.value;
+      } else {
+        monthlyData[monthKey].expense += t.value;
+      }
+    }
   });
 
-  const [upcomingBills, setUpcomingBills] = useState([
-    { id: 1, description: "Aluguel", amount: 1500, dueDate: "05/04/2025", category: "Moradia" },
-    { id: 2, description: "Energia", amount: 180, dueDate: "10/04/2025", category: "Moradia" },
-    { id: 3, description: "Netflix", amount: 35, dueDate: "15/04/2025", category: "Lazer" },
-    { id: 4, description: "Internet", amount: 99, dueDate: "20/04/2025", category: "Moradia" }
-  ]);
+  const barChartData = {
+    labels: Object.keys(monthlyData).map(key => {
+      const [year, month] = key.split("-");
+      return new Date(parseInt(year), parseInt(month) - 1).toLocaleString('pt-BR', { month: 'short' });
+    }),
+    datasets: [
+      {
+        label: 'Receitas',
+        data: Object.values(monthlyData).map(d => d.income),
+        backgroundColor: 'rgba(54, 162, 235, 0.6)',
+      },
+      {
+        label: 'Despesas',
+        data: Object.values(monthlyData).map(d => d.expense),
+        backgroundColor: 'rgba(255, 99, 132, 0.6)',
+      },
+    ],
+  };
 
-  const [recentTransactions, setRecentTransactions] = useState([
-    { id: 1, description: "Salário", amount: 4500, date: "01/04/2025", type: "income", category: "Trabalho" },
-    { id: 2, description: "Supermercado", amount: 280, date: "02/04/2025", type: "expense", category: "Alimentação" },
-    { id: 3, description: "Restaurante", amount: 120, date: "03/04/2025", type: "expense", category: "Lazer" },
-    { id: 4, description: "Freelance", amount: 700, date: "04/04/2025", type: "income", category: "Trabalho" },
-    { id: 5, description: "Combustível", amount: 150, date: "05/04/2025", type: "expense", category: "Transporte" }
-  ]);
+  const pieChartData = {
+    labels: Object.keys(expenseByCategory),
+    datasets: [
+      {
+        data: Object.values(expenseByCategory), // ✅ CORRIGIDO: adicionado "data:"
+        backgroundColor: [
+          "#FF6384",
+          "#36A2EB",
+          "#FFCE56",
+          "#4BC0C0",
+          "#9966FF",
+          "#FF9F40",
+          "#8AC926"
+        ],
+        borderWidth: 2,
+      }
+    ]
+  };
 
-  // Se ainda estiver carregando, mostra loading
+  // Alertas de vencimento (próximos 7 dias)
+  const today = new Date();
+  const nextWeek = new Date();
+  nextWeek.setDate(today.getDate() + 7);
+
+  const upcomingBills = transactions
+    .filter(t => 
+      t.type === "expense" && 
+      t.status === "pending" &&
+      new Date(t.date) >= today &&
+      new Date(t.date) <= nextWeek
+    )
+    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+  // Transações recentes (últimas 5)
+  const recentTransactions = [...transactions]
+    .sort((a, b) => new Date(b.createdAt?.seconds ? b.createdAt.seconds * 1000 : b.date).getTime() - new Date(a.createdAt?.seconds ? a.createdAt.seconds * 1000 : a.date).getTime())
+    .slice(0, 5);
+
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gray-50">
@@ -91,71 +205,14 @@ export default function DashboardPage() {
     );
   }
 
-  // Se não estiver logado, não renderiza (já redirecionou)
   if (!user) return null;
 
-  // Determina o nome a ser exibido
-  const displayName = user.displayName || user.email?.split('@')[0] || 'Usuário';
+  const displayName = user.displayName || user.email?.split("@")[0] || "Usuário";
 
-  const barChartData = {
-    labels: ['Jan', 'Fev', 'Mar', 'Abr'],
-    datasets: [
-      {
-        label: 'Receitas',
-        data: [4800, 5200, 4900, 5200],
-        backgroundColor: 'rgba(54, 162, 235, 0.6)',
-      },
-      {
-        label: 'Despesas',
-        data: [3200, 3100, 3400, 3150],
-        backgroundColor: 'rgba(255, 99, 132, 0.6)',
-      },
-    ],
+  const handleLogout = async () => {
+    await auth.signOut();
+    router.push("/");
   };
-
-  const pieChartData = {
-    labels: ['Moradia', 'Alimentação', 'Transporte', 'Lazer', 'Saúde'],
-    datasets: [
-      {
-        data: [1500, 680, 350, 250, 150],
-        backgroundColor: [
-          '#FF6384',
-          '#36A2EB',
-          '#FFCE56',
-          '#4BC0C0',
-          '#9966FF'
-        ],
-        borderWidth: 2,
-      }
-    ]
-  };
-
-  const barChartOptions = {
-    responsive: true,
-    plugins: {
-      legend: {
-        position: 'top' as const,
-      },
-      title: {
-        display: true,
-        text: 'Receitas vs Despesas (últimos 4 meses)',
-      },
-    },
-  };
-
-  const pieChartOptions = {
-    responsive: true,
-    plugins: {
-      legend: {
-        position: 'top' as const,
-      },
-      title: {
-        display: true,
-        text: 'Distribuição de Despesas por Categoria',
-      },
-    },
-  };
-  // ===========================================================================
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -165,7 +222,7 @@ export default function DashboardPage() {
           <h1 className="text-3xl font-bold text-gray-900">FinTrack Dashboard</h1>
           <div className="flex items-center space-x-4">
             <span className="text-gray-700">Olá, <span className="font-semibold">{displayName}</span></span>
-            <button 
+            <button
               onClick={handleLogout}
               className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition"
             >
@@ -179,91 +236,151 @@ export default function DashboardPage() {
         {/* Cards de Resumo */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
           <div className="bg-gradient-to-r from-green-500 to-green-600 rounded-xl shadow-lg p-6 text-white">
-            <h3 className="text-lg font-semibold mb-2">Receitas Totais</h3>
-            <p className="text-3xl font-bold">R$ {balance.income.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
-            <p className="text-green-100 text-sm mt-2">+12% em relação ao mês anterior</p>
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-semibold mb-2">Receitas Totais</h3>
+                <p className="text-3xl font-bold">
+                  R$ {balanceData.income.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                </p>
+              </div>
+              <ArrowUpIcon className="w-8 h-8 text-green-200" />
+            </div>
           </div>
           
           <div className="bg-gradient-to-r from-red-500 to-red-600 rounded-xl shadow-lg p-6 text-white">
-            <h3 className="text-lg font-semibold mb-2">Despesas Totais</h3>
-            <p className="text-3xl font-bold">R$ {balance.expenses.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
-            <p className="text-red-100 text-sm mt-2">-5% em relação ao mês anterior</p>
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-semibold mb-2">Despesas Totais</h3>
+                <p className="text-3xl font-bold">
+                  R$ {balanceData.expenses.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                </p>
+              </div>
+              <ArrowDownIcon className="w-8 h-8 text-red-200" />
+            </div>
           </div>
           
-          <div className="bg-gradient-to-r from-blue-500 to-blue-600 rounded-xl shadow-lg p-6 text-white">
-            <h3 className="text-lg font-semibold mb-2">Saldo Atual</h3>
-            <p className="text-3xl font-bold">R$ {balance.balance.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
-            <p className="text-blue-100 text-sm mt-2">Saldo positivo</p>
+          <div className={`bg-gradient-to-r ${balance >= 0 ? "from-blue-500 to-blue-600" : "from-yellow-500 to-yellow-600"} rounded-xl shadow-lg p-6 text-white`}>
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-semibold mb-2">Saldo Atual</h3>
+                <p className="text-3xl font-bold">
+                  R$ {balance.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                </p>
+              </div>
+              <CurrencyDollarIcon className="w-8 h-8 text-blue-200" />
+            </div>
           </div>
         </div>
 
         {/* Gráficos */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
           <div className="bg-white rounded-xl shadow-lg p-6">
-            <Bar data={barChartData} options={barChartOptions} />
+            <h2 className="text-xl font-bold text-gray-900 mb-4">Receitas vs Despesas (últimos 4 meses)</h2>
+            {Object.keys(monthlyData).some(key => monthlyData[key].income > 0 || monthlyData[key].expense > 0) ? (
+              <Bar 
+                data={barChartData} 
+                options={{ 
+                  responsive: true,
+                  plugins: {
+                    legend: { position: "top" as const },
+                  }
+                }} 
+              />
+            ) : (
+              <p className="text-gray-500 text-center py-8">Nenhuma transação registrada</p>
+            )}
           </div>
           
           <div className="bg-white rounded-xl shadow-lg p-6">
-            <Pie data={pieChartData} options={pieChartOptions} />
+            <h2 className="text-xl font-bold text-gray-900 mb-4">Distribuição de Despesas por Categoria</h2>
+            {Object.keys(expenseByCategory).length > 0 ? (
+              <Pie 
+                data={pieChartData} 
+                options={{ 
+                  responsive: true,
+                  plugins: {
+                    legend: { position: "top" as const },
+                  }
+                }} 
+              />
+            ) : (
+              <p className="text-gray-500 text-center py-8">Nenhuma despesa registrada</p>
+            )}
           </div>
         </div>
 
-        {/* Alertas e Transações Recentes */}
+        {/* Alertas de Vencimento + Transações Recentes */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           {/* Próximas Despesas */}
           <div className="bg-white rounded-xl shadow-lg p-6">
-            <h2 className="text-xl font-bold text-gray-900 mb-4">Próximas Despesas</h2>
-            <div className="space-y-4">
-              {upcomingBills.map((bill) => (
-                <div key={bill.id} className="flex justify-between items-center p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition">
-                  <div>
-                    <h3 className="font-medium text-gray-900">{bill.description}</h3>
-                    <p className="text-sm text-gray-500">{bill.category} • Vence em {bill.dueDate}</p>
-                  </div>
-                  <span className="text-lg font-semibold text-red-600">R$ {bill.amount.toFixed(2)}</span>
-                </div>
-              ))}
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-bold text-gray-900">Próximas Despesas</h2>
+              <CalendarIcon className="w-6 h-6 text-gray-500" />
             </div>
+            {upcomingBills.length > 0 ? (
+              <div className="space-y-4">
+                {upcomingBills.map((bill) => (
+                  <div 
+                    key={bill.id} 
+                    className="flex justify-between items-center p-4 border-l-4 border-red-500 bg-red-50 rounded-lg"
+                  >
+                    <div>
+                      <h3 className="font-medium text-gray-900">{bill.description}</h3>
+                      <p className="text-sm text-gray-600">
+                        {bill.category} • Vence em {new Date(bill.date).toLocaleDateString("pt-BR")}
+                      </p>
+                    </div>
+                    <span className="text-lg font-semibold text-red-600">
+                      R$ {bill.value.toFixed(2)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-gray-500">Nenhuma conta vencendo nos próximos 7 dias</p>
+            )}
           </div>
 
           {/* Transações Recentes */}
           <div className="bg-white rounded-xl shadow-lg p-6">
-            <h2 className="text-xl font-bold text-gray-900 mb-4">Transações Recentes</h2>
-            <div className="space-y-4">
-              {recentTransactions.map((transaction) => (
-                <div key={transaction.id} className="flex justify-between items-center p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition">
-                  <div>
-                    <h3 className="font-medium text-gray-900">{transaction.description}</h3>
-                    <p className="text-sm text-gray-500">{transaction.category} • {transaction.date}</p>
-                  </div>
-                  <span className={`text-lg font-semibold ${transaction.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>
-                    {transaction.type === 'income' ? '+' : '-'} R$ {transaction.amount.toFixed(2)}
-                  </span>
-                </div>
-              ))}
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-bold text-gray-900">Transações Recentes</h2>
+              <ClockIcon className="w-6 h-6 text-gray-500" />
             </div>
+            {recentTransactions.length > 0 ? (
+              <div className="space-y-4">
+                {recentTransactions.map((t) => (
+                  <div 
+                    key={t.id} 
+                    className="flex justify-between items-center p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition"
+                  >
+                    <div>
+                      <h3 className="font-medium text-gray-900">{t.description}</h3>
+                      <p className="text-sm text-gray-500">
+                        {t.category} • {new Date(t.date).toLocaleDateString("pt-BR")}
+                      </p>
+                    </div>
+                    <span className={`text-lg font-semibold ${t.type === "income" ? "text-green-600" : "text-red-600"}`}>
+                      {t.type === "income" ? "+" : "-"} R$ {t.value.toFixed(2)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-gray-500">Nenhuma transação registrada</p>
+            )}
           </div>
         </div>
 
-        {/* Cotações */}
-        <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="bg-white rounded-xl shadow-lg p-6 text-center">
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">Dólar (USD)</h3>
-            <p className="text-2xl font-bold text-green-600">R$ 5,12</p>
-            <p className="text-sm text-gray-500">+0.5% hoje</p>
-          </div>
-          
-          <div className="bg-white rounded-xl shadow-lg p-6 text-center">
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">Euro (EUR)</h3>
-            <p className="text-2xl font-bold text-red-600">R$ 5,56</p>
-            <p className="text-sm text-gray-500">-0.2% hoje</p>
-          </div>
-          
-          <div className="bg-white rounded-xl shadow-lg p-6 text-center">
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">Ibovespa</h3>
-            <p className="text-2xl font-bold text-blue-600">125.420</p>
-            <p className="text-sm text-gray-500">+1.2% hoje</p>
-          </div>
+        {/* Botão para adicionar transação */}
+        <div className="mt-8 text-center">
+          <a 
+            href="dashboard/transactions/add/" 
+            className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-6 rounded-lg transition"
+          >
+            <PlusCircleIcon className="w-5 h-5" />
+            Adicionar Nova Transação
+          </a>
         </div>
       </main>
     </div>
