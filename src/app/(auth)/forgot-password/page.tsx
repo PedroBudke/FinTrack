@@ -15,9 +15,13 @@ export default function ForgotPasswordPage() {
     try {
       await sendPasswordResetEmail(auth, email);
       toast.success("E-mail de recuperação enviado!");
-    } catch (error: any) {
-      toast.error(error.message);
-    }
+    } catch (error: unknown) {
+  if (error instanceof Error) {
+    toast.error(error.message);
+  } else {
+    toast.error("An unexpected error occurred");
+  }
+}
   };
 
   return (

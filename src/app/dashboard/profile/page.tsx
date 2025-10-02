@@ -1,48 +1,67 @@
-// app/dashboard/profile/page.tsx
 "use client";
 
+export const dynamic = "force-dynamic"; // ✅ Evita pré-render estático
+
 import { useSession } from "next-auth/react";
-import { useState, useEffect } from "react";
-import { db } from "@/src/lib/firebase";
+import { useEffect, useState } from "react";
+import { db } from "@/lib/firebase";
 import { doc, getDoc, updateDoc } from "firebase/firestore";
 import toast from "react-hot-toast";
 
 export default function ProfilePage() {
-  const { data: session } = useSession();
+  // ✅ Adiciona fallback para evitar erro no build
+  const sessionResult = useSession();
+  const session = sessionResult?.data ?? null;
+  const status = sessionResult?.status ?? "loading";
+
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [cpf, setCpf] = useState("");
 
   useEffect(() => {
-    const fetchProfile = async () => {
-      if (session?.user?.email) {
-        const userDoc = await getDoc(doc(db, "users", session.user.email));
-        if (userDoc.exists()) {
-          const userData = userDoc.data();
-          setName(userData.name || "");
-          setEmail(userData.email || "");
-          setCpf(userData.cpf || "");
+    if (status === "authenticated" && session?.user?.id) {
+      const userId = session.user.id; // ✅ uid do Firebase
+      const fetchProfile = async () => {
+        try {
+          const userDoc = await getDoc(doc(db, "users", userId)); // ✅ Usa uid
+          if (userDoc.exists()) {
+            const userData = userDoc.data();
+            setName(userData.name || "");
+            setEmail(userData.email || "");
+            setCpf(userData.cpf || "");
+          }
+        } catch (err) {
+          toast.error("Erro ao carregar perfil.");
         }
-      }
-    };
-    fetchProfile();
-  }, [session]);
+      };
+      fetchProfile();
+    }
+  }, [status, session]);
 
   const handleUpdate = async () => {
+    if (!session?.user?.id) return;
     try {
-      if (session?.user?.email) {
-        await updateDoc(doc(db, "users", session.user.email), {
-          name,
-        });
-        toast.success("Perfil atualizado!");
-      }
+      await updateDoc(doc(db, "users", session.user.id), { name });
+      toast.success("Perfil atualizado!");
     } catch (error) {
-      toast.error("Erro ao atualizar");
+      if (error instanceof Error) {
+        toast.error(error.message);
+      } else {
+        toast.error("Erro ao atualizar perfil.");
+      }
     }
   };
 
+  if (status === "loading") {
+    return <p className="text-center mt-10">Carregando sessão...</p>;
+  }
+
+  if (status === "unauthenticated") {
+    return <p className="text-center mt-10">Acesso negado. Faça login.</p>;
+  }
+
   return (
-    <div className="max-w-md mx-auto bg-white p-6 rounded shadow">
+    <div className="max-w-md mx-auto bg-white p-6 rounded shadow mt-6">
       <h1 className="text-2xl font-bold mb-6">Meu Perfil</h1>
       <div className="space-y-4">
         <div>

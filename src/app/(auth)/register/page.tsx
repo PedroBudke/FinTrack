@@ -5,6 +5,7 @@ import { useState } from "react";
 import { createUserWithEmailAndPassword } from "firebase/auth";
 import { auth, db } from "../../../lib/firebase";
 import { doc, setDoc } from "firebase/firestore";
+import { sendEmailVerification } from "firebase/auth";
 import toast from "react-hot-toast";
 import Link from "next/link";
 
@@ -38,13 +39,18 @@ export default function RegisterPage() {
       });
 
       // Enviar e-mail de verificação
-      await user.sendEmailVerification();
-      toast.success("Conta criada! Verifique seu e-mail para ativar.");
-      window.location.href = "/login";
-    } catch (error: any) {
-      toast.error(error.message);
-    }
-  };
+      await sendEmailVerification(user);
+    
+    toast.success("Conta criada! Verifique seu e-mail para ativar.");
+    window.location.href = "/login";
+  } catch (error: unknown) {
+  if (error instanceof Error) {
+    toast.error(error.message);
+  } else {
+    toast.error("An unexpected error occurred");
+  }
+}
+};
 
   return (
     <div className="w-full max-w-md p-8 space-y-6 bg-white rounded-lg shadow-md">
