@@ -8,7 +8,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { auth, db } from "@/lib/firebase";
 import { onAuthStateChanged, User } from "firebase/auth";
-import { collection, getDocs, query, where } from "firebase/firestore";
+import { collection, getDocs, query, where, deleteDoc, doc } from "firebase/firestore";
 import { toast } from "react-hot-toast";
 import { Bar, Pie } from "react-chartjs-2";
 import {
@@ -70,7 +70,7 @@ export default function DashboardPage() {
         setUser(currentUser);
       } else {
         toast.error("Faça login para acessar o dashboard.");
-        router.push("/auth/login");
+        router.push("/");
       }
       setLoading(false);
     });
@@ -234,6 +234,21 @@ export default function DashboardPage() {
     router.push("/");
   };
 
+  const handleDeleteTransaction = async (transactionId: string, description: string) => {
+    if (!window.confirm(`Tem certeza que deseja excluir "${description}"? Esta ação não pode ser desfeita.`)) {
+      return;
+    }
+
+    try {
+      await deleteDoc(doc(db, "transactions", transactionId));
+      setTransactions(prev => prev.filter(t => t.id !== transactionId));
+      toast.success("Transação excluída com sucesso!");
+    } catch (error) {
+      console.error("Erro ao excluir transação:", error);
+      toast.error("Erro ao excluir transação.");
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
@@ -359,9 +374,20 @@ export default function DashboardPage() {
                         {bill.category} • Vence em {new Date(bill.date).toLocaleDateString("pt-BR")}
                       </p>
                     </div>
-                    <span className="text-lg font-semibold text-red-600">
-                      R$ {bill.value.toFixed(2)}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-lg font-semibold text-red-600">
+                        R$ {bill.value.toFixed(2)}
+                      </span>
+                      <button
+                        onClick={() => handleDeleteTransaction(bill.id, bill.description)}
+                        className="text-gray-500 hover:text-red-600 p-1 rounded-full hover:bg-red-100 transition"
+                        aria-label="Excluir despesa"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -388,13 +414,24 @@ export default function DashboardPage() {
                         {t.category} • {new Date(t.date).toLocaleDateString("pt-BR")}
                       </p>
                     </div>
-                    <span
-                      className={`text-lg font-semibold ${
-                        t.type === "income" ? "text-green-600" : "text-red-600"
-                      }`}
-                    >
-                      {t.type === "income" ? "+" : "-"} R$ {t.value.toFixed(2)}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`text-lg font-semibold ${
+                          t.type === "income" ? "text-green-600" : "text-red-600"
+                        }`}
+                      >
+                        {t.type === "income" ? "+" : "-"} R$ {t.value.toFixed(2)}
+                      </span>
+                      <button
+                        onClick={() => handleDeleteTransaction(t.id, t.description)}
+                        className="text-gray-500 hover:text-red-600 p-1 rounded-full hover:bg-red-50 transition"
+                        aria-label="Excluir transação"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
